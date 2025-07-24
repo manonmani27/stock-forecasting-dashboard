@@ -11,6 +11,13 @@ from tensorflow.keras.preprocessing.sequence import TimeseriesGenerator
 import datetime
 import os
 
+# Try importing Prophet
+try:
+    from prophet import Prophet
+    prophet_available = True
+except ImportError:
+    prophet_available = False
+
 # Set page
 st.set_page_config(page_title="📈 Stock Forecasting", layout="wide")
 st.title("📈 Stock Price Forecasting Dashboard")
@@ -54,14 +61,12 @@ def load_data(ticker, start, end):
 
 data = load_data(ticker, start_date, end_date)
 
-# Filter out any future data rows
+# Remove future rows (in case yfinance includes them)
 data = data[data.index <= pd.Timestamp.today()]
 
 if data.empty:
     st.error("❌ No historical data found for selected range.")
     st.stop()
-
-st.write("✅ Data shape:", data.shape)
 
 # Plot
 st.subheader("📈 Closing Price Chart")
@@ -73,49 +78,34 @@ df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close"
 train_size = int(len(df) * 0.8)
 train, test = df[:train_size], df[train_size:]
 
-# Debug test/train sizes
-st.write("📊 Train size:", len(train), "Test size:", len(test))
-
 # Run Models
 def run_arima(train, test):
-    try:
-        ts_train = train["y"]
-        model = ARIMA(ts_train, order=(5, 1, 0))
-        fitted = model.fit()
-        forecast = fitted.forecast(steps=len(test))
-        rmse = np.sqrt(mean_squared_error(test["y"], forecast))
-        return forecast, rmse
-    except Exception as e:
-        st.error(f"❌ ARIMA error: {e}")
-        return [], 0
+    ts_train = train["y"]
+    model = ARIMA(ts_train, order=(5, 1, 0))
+    fitted = model.fit()
+    forecast = fitted.forecast(steps=len(test))
+    rmse = np.sqrt(mean_squared_error(test["y"], forecast))
+    return forecast, rmse
 
 def run_lstm(train, test):
-    try:
-        series = np.concatenate([train["y"].values, test["y"].values])
-        series = series.reshape(-1, 1)
-        gen = TimeseriesGenerator(series, series, length=10, batch_size=1)
+    series = np.concatenate([train["y"].values, test["y"].values])
+    series = series.reshape(-1, 1)
+    gen = TimeseriesGenerator(series, series, length=10, batch_size=1)
+    model = Sequential()
+    model.add(LSTM(50, activation='relu', input_shape=(10, 1)))
+    model.add(Dense(1))
+    model.compile(optimizer='adam', loss='mse')
+    model.fit(gen, epochs=5, verbose=0)
+    predictions = []
+    curr_batch = series[-len(test)-10:-len(test)].reshape(1, 10, 1)
+    for _ in range(len(test)):
+        pred = model.predict(curr_batch, verbose=0)[0]
+        predictions.append(pred[0])
+        curr_batch = np.append(curr_batch[:, 1:, :], [[pred]], axis=1)
+    rmse = np.sqrt(mean_squared_error(test["y"], predictions))
+    return predictions, rmse
 
-        model = Sequential()
-        model.add(LSTM(50, activation='relu', input_shape=(10, 1)))
-        model.add(Dense(1))
-        model.compile(optimizer='adam', loss='mse')
-        model.fit(gen, epochs=5, verbose=0)
-
-        predictions = []
-        curr_batch = series[-len(test)-10:-len(test)].reshape(1, 10, 1)
-
-        for i in range(len(test)):
-            pred = model.predict(curr_batch, verbose=0)[0]
-            predictions.append(pred[0])
-            curr_batch = np.append(curr_batch[:, 1:, :], [[pred]], axis=1)
-
-        rmse = np.sqrt(mean_squared_error(test["y"], predictions))
-        return predictions, rmse
-    except Exception as e:
-        st.error(f"❌ LSTM error: {e}")
-        return [], 0
-
-# Run and display
+# Main Forecast Execution
 if model_type == "ARIMA":
     st.subheader("🔮 ARIMA Forecast")
     preds, rmse = run_arima(train, test)
@@ -123,28 +113,59 @@ else:
     st.subheader("🔮 LSTM Forecast")
     preds, rmse = run_lstm(train, test)
 
-# Validate and plot
-if not isinstance(preds, (list, np.ndarray)) or len(preds) == 0:
-    st.error("❌ No forecast results to display.")
+# Plot Main Forecast
+if len(preds) != len(test):
+    st.warning(f"⚠️ Forecast length mismatch. Truncating.")
+    min_len = min(len(preds), len(test))
+    preds = preds[:min_len]
+    test = test[:min_len]
+
+forecast_df = test.copy().reset_index(drop=True)
+forecast_df["Forecast"] = preds
+
+fig2 = px.line(
+    forecast_df,
+    x="ds",
+    y=["y", "Forecast"],
+    labels={"value": "Price", "ds": "Date"},
+    title=f"{model_type} Forecast vs Actual"
+)
+st.plotly_chart(fig2)
+st.metric("RMSE", f"{rmse:.2f}")
+
+# RMSE Comparison Chart
+rmse_scores = {}
+try:
+    _, rmse_arima = run_arima(train, test)
+    rmse_scores["ARIMA"] = rmse_arima
+except:
+    rmse_scores["ARIMA"] = None
+
+if prophet_available:
+    try:
+        prophet_model = Prophet(daily_seasonality=True)
+        prophet_model.fit(train)
+        future = prophet_model.make_future_dataframe(periods=len(test), freq='B')
+        forecast = prophet_model.predict(future)
+        yhat = forecast["yhat"][-len(test):].values
+        rmse_scores["Prophet"] = np.sqrt(mean_squared_error(test["y"].values, yhat))
+    except:
+        rmse_scores["Prophet"] = None
+
+try:
+    _, rmse_lstm = run_lstm(train, test)
+    rmse_scores["LSTM"] = rmse_lstm
+except:
+    rmse_scores["LSTM"] = None
+
+# Plot RMSE comparison
+rmse_valid = {k: v for k, v in rmse_scores.items() if v is not None}
+if rmse_valid:
+    st.subheader("📉 RMSE Comparison Across Models")
+    rmse_df = pd.DataFrame(list(rmse_valid.items()), columns=["Model", "RMSE"])
+    fig_rmse = px.bar(rmse_df, x="Model", y="RMSE", color="Model",
+                      title="Model RMSE Comparison (Lower is Better)",
+                      text_auto=".2f")
+    st.plotly_chart(fig_rmse)
 else:
-    if len(preds) != len(test):
-        st.warning(f"⚠️ Mismatched lengths: preds={len(preds)}, test={len(test)} — truncating.")
-        min_len = min(len(preds), len(test))
-        preds = preds[:min_len]
-        test = test[:min_len]
-
-    forecast_df = test.copy().reset_index(drop=True)
-    forecast_df["Forecast"] = preds
-
-    st.write("📈 Forecast Data Sample:")
-    st.dataframe(forecast_df.head())
-
-    fig2 = px.line(
-        forecast_df,
-        x="ds",
-        y=["y", "Forecast"],
-        labels={"value": "Price", "ds": "Date"},
-        title=f"{model_type} Forecast vs Actual"
-    )
-    st.plotly_chart(fig2)
-    st.metric("RMSE", f"{rmse:.2f}")
+    st.info("ℹ️ RMSE comparison could not be completed. Some models may have failed.")
