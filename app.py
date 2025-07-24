@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -18,6 +17,7 @@ try:
     prophet_available = True
 except ImportError:
     prophet_available = False
+    st.warning("⚠️ Prophet library is not installed.")
 
 # Set page
 st.set_page_config(page_title="📈 Stock Forecasting", layout="wide")
@@ -36,8 +36,9 @@ if end_date > today:
     st.warning("⚠️ End date cannot be in the future. Resetting to today.")
     end_date = today
 
-model_type = st.selectbox("Model", ["ARIMA", "LSTM"])
+model_type = st.selectbox("Model", ["ARIMA", "LSTM", "Prophet"])
 
+# Prevent large forecast durations
 if (end_date - start_date).days > 365 * 3:
     st.warning("⚠️ Forecasting with more than 3 years of data may be slow, especially for LSTM.")
 
@@ -60,13 +61,8 @@ def load_data(ticker, start, end):
             st.error("❌ Failed to fetch data and fallback CSV not found.")
             return pd.DataFrame()
 
-
-# Remove future rows (in case yfinance includes them)
 safe_end_date = min(end_date, today)
 data = load_data(ticker, start_date, safe_end_date)
-
-# ✅ DO NOT FILTER AGAIN — data already capped at fetch time
-# (No need for: data = data[data.index <= pd.Timestamp.today()])
 
 if data.empty:
     st.error("❌ No historical data found for selected range.")
@@ -109,13 +105,25 @@ def run_lstm(train, test):
     rmse = np.sqrt(mean_squared_error(test["y"], predictions))
     return predictions, rmse
 
+def run_prophet(train, test):
+    prophet_model = Prophet(daily_seasonality=True)
+    prophet_model.fit(train)
+    future = prophet_model.make_future_dataframe(periods=len(test), freq='B')
+    forecast = prophet_model.predict(future)
+    yhat = forecast["yhat"][-len(test):].values
+    rmse = np.sqrt(mean_squared_error(test["y"].values, yhat))
+    return yhat, rmse
+
 # Main Forecast Execution
 if model_type == "ARIMA":
     st.subheader("🔮 ARIMA Forecast")
     preds, rmse = run_arima(train, test)
-else:
+elif model_type == "LSTM":
     st.subheader("🔮 LSTM Forecast")
     preds, rmse = run_lstm(train, test)
+elif model_type == "Prophet" and prophet_available:
+    st.subheader("🔮 Prophet Forecast")
+    preds, rmse = run_prophet(train, test)
 
 # Plot Main Forecast
 if len(preds) != len(test):
@@ -136,6 +144,7 @@ fig2 = px.line(
 )
 st.plotly_chart(fig2)
 st.metric("RMSE", f"{rmse:.2f}")
+
 # Download Forecast CSV
 csv = forecast_df.to_csv(index=False).encode()
 st.download_button(
@@ -145,9 +154,9 @@ st.download_button(
     mime="text/csv"
 )
 
-
 # RMSE Comparison Chart
 rmse_scores = {}
+
 try:
     _, rmse_arima = run_arima(train, test)
     rmse_scores["ARIMA"] = rmse_arima
@@ -156,12 +165,8 @@ except:
 
 if prophet_available:
     try:
-        prophet_model = Prophet(daily_seasonality=True)
-        prophet_model.fit(train)
-        future = prophet_model.make_future_dataframe(periods=len(test), freq='B')
-        forecast = prophet_model.predict(future)
-        yhat = forecast["yhat"][-len(test):].values
-        rmse_scores["Prophet"] = np.sqrt(mean_squared_error(test["y"].values, yhat))
+        _, rmse_prophet = run_prophet(train, test)
+        rmse_scores["Prophet"] = rmse_prophet
     except:
         rmse_scores["Prophet"] = None
 
@@ -182,4 +187,3 @@ if rmse_valid:
     st.plotly_chart(fig_rmse)
 else:
     st.info("ℹ️ RMSE comparison could not be completed. Some models may have failed.")
-
