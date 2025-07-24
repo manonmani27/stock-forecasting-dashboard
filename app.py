@@ -27,7 +27,7 @@ start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("2024-12-31"))
 model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compare All"])
 
-# Warn if date range is too long
+# ✅ Single warning for long date range
 if (end_date - start_date).days > 1825:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
@@ -39,15 +39,14 @@ def load_data(ticker, start, end):
 # Load stock data
 data = load_data(ticker, start_date, end_date)
 
-# Enhanced validation
+# Validation
 if data.empty:
     st.error("❌ No data found. Please check the stock symbol and date range.")
     st.stop()
-elif (end_date - start_date).days > 1825:  # roughly 5 years
-    st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = data.columns.droplevel(0)
+
 st.subheader("📈 Closing Price Chart")
 st.plotly_chart(px.line(data, x=data.index, y="Close", title=f"{ticker} Closing Price"))
 
@@ -128,7 +127,10 @@ with st.spinner("🔮 Forecasting..."):
         if rmse != float("inf"):
             st.subheader("📊 LSTM Results")
             st.write(f"RMSE: {rmse:.2f}")
-            st.line_chart(pd.DataFrame({"Actual": df["y"][train_size+60:].values, "Predicted": preds.flatten()}, index=df["ds"][train_size+60:]))
+            st.line_chart(pd.DataFrame({
+                "Actual": df["y"][train_size+60:].values,
+                "Predicted": preds.flatten()
+            }, index=df["ds"][train_size+60:]))
 
     else:  # Compare All
         p1, r1 = run_prophet(train, test)
@@ -137,5 +139,5 @@ with st.spinner("🔮 Forecasting..."):
         st.subheader("📊 RMSE Comparison")
         st.bar_chart(pd.Series({"Prophet":r1,"ARIMA":r2,"LSTM":r3}))
 
-if time.time()-start_time>45:
+if time.time()-start_time > 45:
     st.warning("⚠️ Forecasting took long. Try smaller range.")
