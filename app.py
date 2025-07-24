@@ -136,6 +136,15 @@ fig2 = px.line(
 )
 st.plotly_chart(fig2)
 st.metric("RMSE", f"{rmse:.2f}")
+# Download Forecast CSV
+csv = forecast_df.to_csv(index=False).encode()
+st.download_button(
+    label="📥 Download Forecast CSV",
+    data=csv,
+    file_name=f"{ticker}_{model_type}_forecast.csv",
+    mime="text/csv"
+)
+
 
 # RMSE Comparison Chart
 rmse_scores = {}
