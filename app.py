@@ -36,11 +36,16 @@ if (end_date - start_date).days > 1825:
 def load_data(ticker, start, end):
     return yf.download(ticker, start=start, end=end)
 
-# Load and display data
+# Load stock data
 data = load_data(ticker, start_date, end_date)
+
+# Enhanced validation
 if data.empty:
-    st.error("❌ No data found for this symbol and date range.")
+    st.error("❌ No data found. Please check the stock symbol and date range.")
     st.stop()
+elif (end_date - start_date).days > 1825:  # roughly 5 years
+    st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
+
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = data.columns.droplevel(0)
 st.subheader("📈 Closing Price Chart")
