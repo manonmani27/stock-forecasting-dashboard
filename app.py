@@ -60,8 +60,6 @@ def load_data(ticker, start, end):
             st.error("❌ Failed to fetch data and fallback CSV not found.")
             return pd.DataFrame()
 
-safe_end_date = min(end_date, today)
-data = load_data(ticker, start_date, safe_end_date)
 
 # Remove future rows (in case yfinance includes them)
 safe_end_date = min(end_date, today)
