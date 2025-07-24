@@ -42,12 +42,28 @@ st.markdown(f"📅 **Fetching data for:** `{ticker}` from `{start_date}` to `{en
 
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
-    try:
-        df = yf.download(ticker, start=start, end=end)
-        if df.empty or "Close" not in df.columns:
-            raise ValueError("Empty or invalid from yfinance")
+    import time
+    tries = 3
+    for attempt in range(tries):
+        try:
+            df = yf.download(ticker, start=start, end=end)
+            if not df.empty:
+                return df
+            else:
+                time.sleep(1)
+        except:
+            time.sleep(1)
+    
+    # Fallback to local CSV if yfinance fails
+    fallback_file = "sample_aapl.csv"
+    if ticker.upper() == "AAPL" and os.path.exists(fallback_file):
+        st.info("✅ Loaded fallback data from sample_aapl.csv")
+        df = pd.read_csv(fallback_file, parse_dates=["Date"])
+        df = df[(df["Date"] >= pd.to_datetime(start)) & (df["Date"] <= pd.to_datetime(end))]
+        df.set_index("Date", inplace=True)
         return df
-    except Exception:
+    return pd.DataFrame()
+
         if ticker.upper() == "AAPL":
             fallback = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
             fallback = fallback[(fallback["Date"] >= pd.to_datetime(start)) & (fallback["Date"] <= pd.to_datetime(end))]
