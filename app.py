@@ -51,6 +51,8 @@ data = load_data(ticker, start_date, end_date)
 if data.empty:
     st.stop()
 
+st.write("✅ Data shape:", data.shape)
+
 # Plot
 st.subheader("📈 Closing Price Chart")
 fig = px.line(data.reset_index(), x="Date", y="Close", title=f"{ticker} Closing Price")
@@ -61,37 +63,47 @@ df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close"
 train_size = int(len(df) * 0.8)
 train, test = df[:train_size], df[train_size:]
 
+# Debug test/train sizes
+st.write("📊 Train size:", len(train), "Test size:", len(test))
+
 # Run Models
 def run_arima(train, test):
-    ts_train = train["y"]
-    model = ARIMA(ts_train, order=(5, 1, 0))
-    fitted = model.fit()
-    forecast = fitted.forecast(steps=len(test))
-    rmse = np.sqrt(mean_squared_error(test["y"], forecast))
-    return forecast, rmse
+    try:
+        ts_train = train["y"]
+        model = ARIMA(ts_train, order=(5, 1, 0))
+        fitted = model.fit()
+        forecast = fitted.forecast(steps=len(test))
+        rmse = np.sqrt(mean_squared_error(test["y"], forecast))
+        return forecast, rmse
+    except Exception as e:
+        st.error(f"❌ ARIMA error: {e}")
+        return [], 0
 
 def run_lstm(train, test):
-    series = np.concatenate([train["y"].values, test["y"].values])
-    series = series.reshape(-1, 1)
+    try:
+        series = np.concatenate([train["y"].values, test["y"].values])
+        series = series.reshape(-1, 1)
+        gen = TimeseriesGenerator(series, series, length=10, batch_size=1)
 
-    gen = TimeseriesGenerator(series, series, length=10, batch_size=1)
+        model = Sequential()
+        model.add(LSTM(50, activation='relu', input_shape=(10, 1)))
+        model.add(Dense(1))
+        model.compile(optimizer='adam', loss='mse')
+        model.fit(gen, epochs=5, verbose=0)
 
-    model = Sequential()
-    model.add(LSTM(50, activation='relu', input_shape=(10, 1)))
-    model.add(Dense(1))
-    model.compile(optimizer='adam', loss='mse')
-    model.fit(gen, epochs=5, verbose=0)
+        predictions = []
+        curr_batch = series[-len(test)-10:-len(test)].reshape(1, 10, 1)
 
-    predictions = []
-    curr_batch = series[-len(test)-10:-len(test)].reshape(1, 10, 1)
+        for i in range(len(test)):
+            pred = model.predict(curr_batch, verbose=0)[0]
+            predictions.append(pred[0])
+            curr_batch = np.append(curr_batch[:, 1:, :], [[pred]], axis=1)
 
-    for i in range(len(test)):
-        pred = model.predict(curr_batch, verbose=0)[0]
-        predictions.append(pred[0])
-        curr_batch = np.append(curr_batch[:, 1:, :], [[pred]], axis=1)
-
-    rmse = np.sqrt(mean_squared_error(test["y"], predictions))
-    return predictions, rmse
+        rmse = np.sqrt(mean_squared_error(test["y"], predictions))
+        return predictions, rmse
+    except Exception as e:
+        st.error(f"❌ LSTM error: {e}")
+        return [], 0
 
 # Run and display
 if model_type == "ARIMA":
@@ -101,12 +113,21 @@ else:
     st.subheader("🔮 LSTM Forecast")
     preds, rmse = run_lstm(train, test)
 
-# Plot Forecast
-if len(preds) != len(test):
-    st.error("❌ Forecast length does not match test set length. Plot skipped.")
+# Validate and plot
+if not isinstance(preds, (list, np.ndarray)) or len(preds) == 0:
+    st.error("❌ No forecast results to display.")
 else:
+    if len(preds) != len(test):
+        st.warning(f"⚠️ Mismatched lengths: preds={len(preds)}, test={len(test)} — truncating.")
+        min_len = min(len(preds), len(test))
+        preds = preds[:min_len]
+        test = test[:min_len]
+
     forecast_df = test.copy().reset_index(drop=True)
     forecast_df["Forecast"] = preds
+
+    st.write("📈 Forecast Data Sample:")
+    st.dataframe(forecast_df.head())
 
     fig2 = px.line(
         forecast_df,
