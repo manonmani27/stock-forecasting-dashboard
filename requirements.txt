@@ -1,3 +1,4 @@
+tensorflow==2.12.1
 streamlit
 yfinance
 pandas
@@ -5,8 +6,8 @@ numpy
 prophet
 statsmodels
 scikit-learn
-tensorflow
 plotly
+
 
 
 
