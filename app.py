@@ -15,14 +15,17 @@ import os
 st.set_page_config(page_title="📈 Stock Forecasting", layout="wide")
 st.title("📈 Stock Price Forecasting Dashboard")
 
-# Inputs
+# Default to last 3 years
+today = datetime.date.today()
+three_years_ago = today - datetime.timedelta(days=3 * 365)
+
 ticker = st.text_input("Stock Symbol", "AAPL")
-start_date = st.date_input("Start Date", datetime.date(2018, 1, 1))
-end_date = st.date_input("End Date", datetime.date(2024, 12, 31))
+start_date = st.date_input("Start Date", three_years_ago)
+end_date = st.date_input("End Date", today)
 model_type = st.selectbox("Model", ["ARIMA", "LSTM"])
 
-if (end_date - start_date).days > 365 * 5:
-    st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
+if (end_date - start_date).days > 365 * 3:
+    st.warning("⚠️ Forecasting with more than 3 years of data may be slow, especially for LSTM.")
 
 # Fetch Data
 @st.cache_data
@@ -99,10 +102,18 @@ else:
     preds, rmse = run_lstm(train, test)
 
 # Plot Forecast
-forecast_df = test.copy()
-forecast_df["Forecast"] = preds
+if len(preds) != len(test):
+    st.error("❌ Forecast length does not match test set length. Plot skipped.")
+else:
+    forecast_df = test.copy().reset_index(drop=True)
+    forecast_df["Forecast"] = preds
 
-fig2 = px.line(forecast_df, x="ds", y=["y", "Forecast"], labels={"value": "Price", "ds": "Date"}, title=f"{model_type} Forecast vs Actual")
-st.plotly_chart(fig2)
-
-st.metric("RMSE", f"{rmse:.2f}")
+    fig2 = px.line(
+        forecast_df,
+        x="ds",
+        y=["y", "Forecast"],
+        labels={"value": "Price", "ds": "Date"},
+        title=f"{model_type} Forecast vs Actual"
+    )
+    st.plotly_chart(fig2)
+    st.metric("RMSE", f"{rmse:.2f}")
