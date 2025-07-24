@@ -41,16 +41,20 @@ if (end_date - start_date).days > 1825:
 st.markdown(f"📅 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
 
 @st.cache_data(show_spinner=False)
-def load_data(ticker, start, end, max_tries=3):
-    for i in range(max_tries):
-        try:
-            df = yf.download(ticker, start=start, end=end, progress=False)
-            if not df.empty:
-                return df
-        except Exception as e:
-            print(f"Attempt {i+1} failed: {e}")
-        time.sleep(1)
-    return pd.DataFrame()
+def load_data(ticker, start, end):
+    try:
+        df = yf.download(ticker, start=start, end=end)
+        if df.empty or "Close" not in df.columns:
+            raise ValueError("Empty or invalid from yfinance")
+        return df
+    except Exception:
+        if ticker.upper() == "AAPL":
+            fallback = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
+            fallback = fallback[(fallback["Date"] >= pd.to_datetime(start)) & (fallback["Date"] <= pd.to_datetime(end))]
+            fallback.set_index("Date", inplace=True)
+            return fallback
+        return pd.DataFrame()
+
 
 data = load_data(ticker, start_date, end_date)
 
