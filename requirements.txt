@@ -6,6 +6,8 @@ plotly
 scikit-learn
 tensorflow
 prophet
+statsmodels==0.14.0
+
 
 
 
