@@ -29,7 +29,6 @@ warnings.filterwarnings("ignore")
 # UI
 st.title("📈 Stock Price Forecasting Dashboard")
 
-# Sidebar controls
 today = pd.to_datetime("today").normalize()
 ticker = st.sidebar.text_input("Stock Symbol", value="AAPL")
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
@@ -39,25 +38,26 @@ model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compa
 if (end_date - start_date).days > 1825:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
-st.markdown(f"📥 Fetching data for: `{ticker}` from `{start_date}` to `{end_date}`")
+st.markdown(f"📅 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
 
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
     try:
-        df = yf.download(ticker, start=start, end=end, group_by="ticker", auto_adjust=True)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(1)
-        return df
-    except Exception as e:
-        st.warning(f"⚠️ yfinance error: {e}. Trying fallback...")
-        try:
-            fallback = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
-            fallback = fallback.rename(columns={"Date": "ds", "Close": "y"}).set_index("ds")
-            st.success("✅ Loaded fallback data from sample_aapl.csv")
-            return fallback.rename(columns={"y": "Close"})
-        except Exception as e:
-            st.error(f"❌ Fallback failed: {e}")
-            return pd.DataFrame()
+        df = yf.download(ticker, start=start, end=end)
+        if df.empty:
+            raise ValueError("Empty data from yfinance")
+    except Exception:
+        st.warning("🔁 Failed to fetch online. Using fallback CSV.")
+        df = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
+        df.set_index("Date", inplace=True)
+        st.success("✅ Loaded fallback data from sample_aapl.csv")
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df["Close"].to_frame()
+        df.columns = ["Close"]
+
+    df = df.loc[:, ~df.columns.duplicated()]
+    return df
 
 data = load_data(ticker, start_date, end_date)
 
