@@ -1,15 +1,9 @@
 import streamlit as st
-
-# MUST BE FIRST STREAMLIT CALL
-st.set_page_config(page_title="📈 Stock Forecasting Dashboard", layout="wide")
-
-# Now import rest
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import sys
-from prophet import Prophet
+import yfinance as yf
 from statsmodels.tsa.arima.model import ARIMA
+from prophet import Prophet
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
 from tensorflow.keras.models import Sequential
@@ -18,67 +12,63 @@ import plotly.express as px
 import warnings
 import time
 import os
+import sys
 
-# Debug Python version
-st.write("Python version:", sys.version)
-
-# Clean logs
+st.set_page_config(page_title="📈 Stock Forecasting Dashboard", layout="wide")
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
-
-# UI
+st.write("Python version:", sys.version)
 st.title("📈 Stock Price Forecasting Dashboard")
 
-today = pd.to_datetime("today").normalize()
-ticker = st.sidebar.text_input("Stock Symbol", value="AAPL")
+ticker = st.sidebar.text_input("Stock Symbol", value="AAPL").upper()
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
-end_date = st.sidebar.date_input("End Date", value=min(pd.to_datetime("2024-12-31"), today), max_value=today)
+end_date = st.sidebar.date_input("End Date", pd.to_datetime("2024-12-31"))
 model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compare All"])
 
 if (end_date - start_date).days > 1825:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
-st.markdown(f"📅 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
+st.markdown(f"📅 Fetching data for: `{ticker}` from `{start_date}` to `{end_date}`")
 
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
     try:
         df = yf.download(ticker, start=start, end=end)
-        if df.empty:
-            raise ValueError("Empty data from yfinance")
+        if isinstance(df.columns, pd.MultiIndex):
+            df = df['Close'].to_frame()
+            df.columns = ['Close']
+        elif 'Close' not in df.columns:
+            raise ValueError("Missing 'Close' column")
+        return df
     except Exception:
-        st.warning("🔁 Failed to fetch online. Using fallback CSV.")
-        df = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
-        df.set_index("Date", inplace=True)
-        st.success("✅ Loaded fallback data from sample_aapl.csv")
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df = df["Close"].to_frame()
-        df.columns = ["Close"]
-
-    df = df.loc[:, ~df.columns.duplicated()]
-    return df
+        try:
+            st.info("✅ Loaded fallback data from sample_aapl.csv")
+            df = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
+            df = df[(df["Date"] >= pd.to_datetime(start)) & (df["Date"] <= pd.to_datetime(end))]
+            df.set_index("Date", inplace=True)
+            return df
+        except Exception:
+            return pd.DataFrame()
 
 data = load_data(ticker, start_date, end_date)
 
-if data.empty or "Close" not in data.columns:
-    st.error("❌ No data found. Please check the stock symbol and date range.")
+if data.empty:
+    st.error("❌ No data found. Please check stock symbol and date range.")
     st.stop()
 
 st.subheader("📈 Closing Price Chart")
 st.plotly_chart(px.line(data, x=data.index, y="Close", title=f"{ticker} Closing Price"))
 
-# Prepare for model training
 df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
 train_size = int(len(df) * 0.8)
 train, test = df.iloc[:train_size], df.iloc[train_size:]
 
 @st.cache_resource(show_spinner=False)
 def run_prophet(train, test):
-    m = Prophet(daily_seasonality=True)
-    m.fit(train)
-    future = m.make_future_dataframe(periods=len(test), freq="B")
-    forecast = m.predict(future)
+    model = Prophet(daily_seasonality=True)
+    model.fit(train)
+    future = model.make_future_dataframe(periods=len(test), freq="B")
+    forecast = model.predict(future)
     preds = forecast["yhat"][-len(test):]
     rmse = np.sqrt(mean_squared_error(test["y"], preds))
     return preds, rmse
@@ -86,16 +76,16 @@ def run_prophet(train, test):
 @st.cache_resource(show_spinner=False)
 def run_arima(train, test):
     ts_train = train["y"].astype(float)
-    ts_test = test["y"].astype(float)
-    m = ARIMA(ts_train, order=(5, 1, 0)).fit()
-    preds = m.forecast(steps=len(ts_test))
-    rmse = np.sqrt(mean_squared_error(ts_test, preds))
+    model = ARIMA(ts_train, order=(5, 1, 0))
+    model_fit = model.fit()
+    preds = model_fit.forecast(steps=len(test))
+    rmse = np.sqrt(mean_squared_error(test["y"], preds))
     return preds, rmse
 
 def create_sequences(arr, ts=60):
     X, y = [], []
     for i in range(ts, len(arr)):
-        X.append(arr[i-ts:i, 0])
+        X.append(arr[i - ts:i, 0])
         y.append(arr[i, 0])
     return np.array(X), np.array(y)
 
@@ -113,7 +103,7 @@ def run_lstm(df, train_size, ts=60):
     X_train = X_train.reshape(-1, ts, 1)
     X_test = X_test.reshape(-1, ts, 1)
     model = Sequential([
-        LSTM(50, return_sequences=True, input_shape=(ts,1)),
+        LSTM(50, return_sequences=True, input_shape=(ts, 1)),
         Dropout(0.2),
         LSTM(50),
         Dropout(0.2),
@@ -122,11 +112,11 @@ def run_lstm(df, train_size, ts=60):
     model.compile("adam", "mean_squared_error")
     model.fit(X_train, y_train, epochs=2, batch_size=32, verbose=0)
     preds = scaler.inverse_transform(model.predict(X_test))
-    actual = scaler.inverse_transform(y_test.reshape(-1,1))
+    actual = scaler.inverse_transform(y_test.reshape(-1, 1))
     rmse = np.sqrt(mean_squared_error(actual, preds))
     return preds, rmse
 
-start_time = time.time()
+start = time.time()
 with st.spinner("🔮 Forecasting..."):
     if model_choice == "Prophet":
         preds, rmse = run_prophet(train, test)
@@ -157,5 +147,5 @@ with st.spinner("🔮 Forecasting..."):
         st.subheader("📊 RMSE Comparison")
         st.bar_chart(pd.Series({"Prophet": r1, "ARIMA": r2, "LSTM": r3}))
 
-if time.time() - start_time > 45:
-    st.warning("⚠️ Forecasting took long. Try smaller range.")
+if time.time() - start > 45:
+    st.warning("⚠️ Forecasting took a long time. Try a smaller range.")
