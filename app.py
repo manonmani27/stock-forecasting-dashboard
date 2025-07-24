@@ -12,44 +12,41 @@ import plotly.express as px
 import warnings
 import time
 import os
-from datetime import date
+from datetime import datetime
 
-# Suppress TensorFlow logs & warnings
+# Suppress warnings and TensorFlow messages
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
 
-# Streamlit config
 st.set_page_config(page_title="📈 Stock Forecasting Dashboard", layout="wide")
 st.title("📈 Stock Price Forecasting Dashboard")
 
-# Today's date for validation
-today = pd.to_datetime(date.today())
+today = pd.to_datetime("today").normalize()
+ticker = st.sidebar.text_input("Stock Symbol", value="AAPL").upper()
 
-# Sidebar Inputs
-ticker = st.sidebar.text_input("Stock Symbol", value="AAPL")
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
-end_date = st.sidebar.date_input("End Date", value=min(pd.to_datetime("2024-12-31"), today), max_value=today)
+end_date = st.sidebar.date_input(
+    "End Date", value=min(pd.to_datetime("2024-12-31"), today), max_value=today
+)
+
 model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compare All"])
 
-# Warn if date range is too long
 if (end_date - start_date).days > 1825:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
 st.markdown(f"📥 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
 
-# Cached data loader
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
     try:
-        return yf.download(ticker, start=start, end=end)
+        df = yf.download(ticker, start=start, end=end)
+        return df
     except Exception as e:
-        st.error(f"❌ Error fetching data: {e}")
         return pd.DataFrame()
 
-# Load stock data
 data = load_data(ticker, start_date, end_date)
 
-if data.empty:
+if data.empty or "Close" not in data.columns:
     st.error("❌ No data found. Please check the stock symbol and date range.")
     st.stop()
 
@@ -59,12 +56,10 @@ if isinstance(data.columns, pd.MultiIndex):
 st.subheader("📈 Closing Price Chart")
 st.plotly_chart(px.line(data, x=data.index, y="Close", title=f"{ticker} Closing Price"))
 
-# Prepare train/test split
 df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
 train_size = int(len(df) * 0.8)
 train, test = df.iloc[:train_size], df.iloc[train_size:]
 
-# Forecasting functions
 @st.cache_resource(show_spinner=False)
 def run_prophet(train, test):
     m = Prophet(daily_seasonality=True)
@@ -96,7 +91,7 @@ def run_lstm(df, train_size, ts=60):
     scaler = MinMaxScaler()
     arr = scaler.fit_transform(df[["y"]])
     train_arr, test_arr = arr[:train_size], arr[train_size:]
-    if len(train_arr) < ts+1 or len(test_arr) < ts+1:
+    if len(train_arr) < ts + 1 or len(test_arr) < ts + 1:
         return np.array([]), float("inf")
     X_train, y_train = create_sequences(train_arr, ts)
     X_test, y_test = create_sequences(test_arr, ts)
@@ -111,40 +106,35 @@ def run_lstm(df, train_size, ts=60):
         Dropout(0.2),
         Dense(1)
     ])
-    model.compile("adam", "mean_squared_error")
+    model.compile(optimizer="adam", loss="mean_squared_error")
     model.fit(X_train, y_train, epochs=2, batch_size=32, verbose=0)
     preds = scaler.inverse_transform(model.predict(X_test))
     actual = scaler.inverse_transform(y_test.reshape(-1, 1))
     rmse = np.sqrt(mean_squared_error(actual, preds))
     return preds, rmse
 
-# Run selected model
 start_time = time.time()
 with st.spinner("🔮 Forecasting..."):
-
     if model_choice == "Prophet":
         preds, rmse = run_prophet(train, test)
         st.subheader("📊 Prophet Results")
         st.write(f"RMSE: {rmse:.2f}")
         st.line_chart(pd.DataFrame({"Actual": test["y"], "Predicted": preds}, index=test["ds"]))
-
     elif model_choice == "ARIMA":
         preds, rmse = run_arima(train, test)
         st.subheader("📊 ARIMA Results")
         st.write(f"RMSE: {rmse:.2f}")
         st.line_chart(pd.DataFrame({"Actual": test["y"], "Predicted": preds}, index=test["ds"]))
-
     elif model_choice == "LSTM":
         preds, rmse = run_lstm(df, train_size)
         if rmse != float("inf"):
             st.subheader("📊 LSTM Results")
             st.write(f"RMSE: {rmse:.2f}")
             st.line_chart(pd.DataFrame({
-                "Actual": df["y"][train_size+60:].values,
+                "Actual": df["y"][train_size + 60:].values,
                 "Predicted": preds.flatten()
-            }, index=df["ds"][train_size+60:]))
-
-    else:  # Compare All
+            }, index=df["ds"][train_size + 60:]))
+    else:
         p1, r1 = run_prophet(train, test)
         p2, r2 = run_arima(train, test)
         p3, r3 = run_lstm(df, train_size)
