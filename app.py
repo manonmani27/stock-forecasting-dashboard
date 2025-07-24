@@ -24,8 +24,13 @@ start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2015-01-01"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("2024-12-31"))
 model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compare All"])
 
+# Cached data loader
+@st.cache_data
+def load_data(ticker, start_date, end_date):
+    return yf.download(ticker, start=start_date, end=end_date)
+
 # Load stock data
-data = yf.download(ticker, start=start_date, end=end_date)
+data = load_data(ticker, start_date, end_date)
 
 if data.empty:
     st.error("❌ No data found for this symbol and date range.")
@@ -43,6 +48,7 @@ train_size = int(len(df) * 0.8)
 train, test = df.iloc[:train_size], df.iloc[train_size:]
 
 # Prophet
+@st.cache_resource
 def run_prophet(train, test):
     model = Prophet(daily_seasonality=True)
     model.fit(train)
@@ -53,6 +59,7 @@ def run_prophet(train, test):
     return predicted, rmse, forecast
 
 # ARIMA
+@st.cache_resource
 def run_arima(train, test):
     train_series = train["y"].astype(float)
     test_series = test["y"].astype(float)
@@ -70,20 +77,19 @@ def create_sequences(data, time_step=60):
         y.append(data[i, 0])
     return np.array(X), np.array(y)
 
+@st.cache_resource
 def run_lstm(df, train_size, time_step=60):
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(df[["y"]])
     train_scaled, test_scaled = scaled[:train_size], scaled[train_size:]
 
     if len(train_scaled) < time_step + 1 or len(test_scaled) < time_step + 1:
-        st.error("❌ Not enough data for LSTM model. Try a longer date range.")
         return np.array([]), float("inf")
 
     X_train, y_train = create_sequences(train_scaled, time_step)
     X_test, y_test = create_sequences(test_scaled, time_step)
 
     if X_train.size == 0 or X_test.size == 0:
-        st.error("❌ Failed to create training sequences for LSTM.")
         return np.array([]), float("inf")
 
     X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
