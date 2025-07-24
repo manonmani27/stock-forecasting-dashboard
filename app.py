@@ -72,11 +72,6 @@ if data.empty:
     st.error("❌ No historical data found for selected range.")
     st.stop()
 
-
-if data.empty:
-    st.error("❌ No historical data found for selected range.")
-    st.stop()
-
 # Plot
 st.subheader("📈 Closing Price Chart")
 fig = px.line(data.reset_index(), x="Date", y="Close", title=f"{ticker} Closing Price")
