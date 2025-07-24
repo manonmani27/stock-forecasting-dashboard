@@ -22,6 +22,12 @@ three_years_ago = today - datetime.timedelta(days=3 * 365)
 ticker = st.text_input("Stock Symbol", "AAPL")
 start_date = st.date_input("Start Date", three_years_ago)
 end_date = st.date_input("End Date", today)
+
+# Prevent future end date
+if end_date > today:
+    st.warning("⚠️ End date cannot be in the future. Resetting to today.")
+    end_date = today
+
 model_type = st.selectbox("Model", ["ARIMA", "LSTM"])
 
 if (end_date - start_date).days > 365 * 3:
@@ -48,7 +54,11 @@ def load_data(ticker, start, end):
 
 data = load_data(ticker, start_date, end_date)
 
+# Filter out any future data rows
+data = data[data.index <= pd.Timestamp.today()]
+
 if data.empty:
+    st.error("❌ No historical data found for selected range.")
     st.stop()
 
 st.write("✅ Data shape:", data.shape)
