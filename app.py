@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore")
 # UI
 st.title("📈 Stock Price Forecasting Dashboard")
 
+# Sidebar controls
 today = pd.to_datetime("today").normalize()
 ticker = st.sidebar.text_input("Stock Symbol", value="AAPL")
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
@@ -38,39 +39,30 @@ model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compa
 if (end_date - start_date).days > 1825:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
-st.markdown(f"📅 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
+st.markdown(f"📥 Fetching data for: `{ticker}` from `{start_date}` to `{end_date}`")
 
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
     try:
-        df = yf.download(ticker, start=start, end=end)
-        if df.empty or "Close" not in df.columns:
-            raise ValueError("Invalid data from yfinance")
-        st.success("✅ Loaded data from yfinance")
+        df = yf.download(ticker, start=start, end=end, group_by="ticker", auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(1)
         return df
-    except:
+    except Exception as e:
+        st.warning(f"⚠️ yfinance error: {e}. Trying fallback...")
         try:
-            df = pd.read_csv("sample_aapl.csv", usecols=["Date", "Close"])
-            df.columns = ["Date", "Close"]
-            df["Date"] = pd.to_datetime(df["Date"])
-            df.set_index("Date", inplace=True)
-            st.warning("⚠️ Loaded fallback data from sample_aapl.csv")
-            return df
+            fallback = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
+            fallback = fallback.rename(columns={"Date": "ds", "Close": "y"}).set_index("ds")
+            st.success("✅ Loaded fallback data from sample_aapl.csv")
+            return fallback.rename(columns={"y": "Close"})
         except Exception as e:
-            st.error(f"❌ Fallback data loading failed: {e}")
+            st.error(f"❌ Fallback failed: {e}")
             return pd.DataFrame()
 
 data = load_data(ticker, start_date, end_date)
 
-if data.empty:
+if data.empty or "Close" not in data.columns:
     st.error("❌ No data found. Please check the stock symbol and date range.")
-    st.stop()
-
-if isinstance(data.columns, pd.MultiIndex):
-    data.columns = data.columns.droplevel(0)
-
-if "Close" not in data.columns:
-    st.error("❌ 'Close' column missing in the data.")
     st.stop()
 
 st.subheader("📈 Closing Price Chart")
@@ -95,14 +87,10 @@ def run_prophet(train, test):
 def run_arima(train, test):
     ts_train = train["y"].astype(float)
     ts_test = test["y"].astype(float)
-    try:
-        m = ARIMA(ts_train, order=(5, 1, 0)).fit()
-        preds = m.forecast(steps=len(ts_test))
-        rmse = np.sqrt(mean_squared_error(ts_test, preds))
-        return preds, rmse
-    except Exception as e:
-        st.error(f"❌ ARIMA model failed: {e}")
-        return np.zeros(len(ts_test)), float("inf")
+    m = ARIMA(ts_train, order=(5, 1, 0)).fit()
+    preds = m.forecast(steps=len(ts_test))
+    rmse = np.sqrt(mean_squared_error(ts_test, preds))
+    return preds, rmse
 
 def create_sequences(arr, ts=60):
     X, y = [], []
