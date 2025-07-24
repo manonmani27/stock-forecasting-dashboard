@@ -21,28 +21,41 @@ warnings.filterwarnings("ignore")
 st.set_page_config(page_title="📈 Stock Forecasting Dashboard", layout="wide")
 st.title("📈 Stock Price Forecasting Dashboard")
 
+# Today's date for validation
+today = pd.to_datetime("today").normalize()
+
 # Sidebar Inputs
 ticker = st.sidebar.text_input("Stock Symbol", value="AAPL")
+
+# Date input with validation to avoid future end dates
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
-end_date = st.sidebar.date_input("End Date", pd.to_datetime("2024-12-31"))
+end_date = st.sidebar.date_input(
+    "End Date",
+    value=min(pd.to_datetime("2024-12-31"), today),
+    max_value=today
+)
+
 model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compare All"])
 
-# ✅ Single warning for long date range
+# Warn if date range is too long
 if (end_date - start_date).days > 1825:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
+st.markdown(f"📥 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
+
+# Cached data loader
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
-    st.info(f"📥 Fetching data for: `{ticker}` from {start} to {end}")
     return yf.download(ticker, start=start, end=end)
 
 # Load stock data
 data = load_data(ticker, start_date, end_date)
 
-# Validation
+# Enhanced validation
 if data.empty:
     st.error("❌ No data found. Please check the stock symbol and date range.")
     st.stop()
+
 
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = data.columns.droplevel(0)
