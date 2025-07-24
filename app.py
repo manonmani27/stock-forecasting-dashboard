@@ -42,51 +42,36 @@ st.markdown(f"📅 **Fetching data for:** `{ticker}` from `{start_date}` to `{en
 
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
-    import time
-    tries = 3
-    for attempt in range(tries):
-        try:
-            df = yf.download(ticker, start=start, end=end)
-            if not df.empty:
-                return df
-            else:
-                time.sleep(1)
-        except:
-            time.sleep(1)
-    
-    # Fallback to local CSV if yfinance fails
-    fallback_file = "sample_aapl.csv"
-    if ticker.upper() == "AAPL" and os.path.exists(fallback_file):
-        st.info("✅ Loaded fallback data from sample_aapl.csv")
-        df = pd.read_csv(fallback_file, parse_dates=["Date"])
-        df = df[(df["Date"] >= pd.to_datetime(start)) & (df["Date"] <= pd.to_datetime(end))]
-        df.set_index("Date", inplace=True)
+    try:
+        df = yf.download(ticker, start=start, end=end)
+        if df.empty or "Close" not in df.columns:
+            raise ValueError("Invalid data from yfinance")
+        st.success("✅ Loaded data from yfinance")
         return df
-    return pd.DataFrame()
-
-        if ticker.upper() == "AAPL":
-            fallback = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
-            fallback = fallback[(fallback["Date"] >= pd.to_datetime(start)) & (fallback["Date"] <= pd.to_datetime(end))]
-            fallback.set_index("Date", inplace=True)
-            st.info("✅ Loaded fallback data from sample_aapl.csv")
-            return fallback
-        return pd.DataFrame()
-
+    except:
+        try:
+            df = pd.read_csv("sample_aapl.csv", usecols=["Date", "Close"])
+            df.columns = ["Date", "Close"]
+            df["Date"] = pd.to_datetime(df["Date"])
+            df.set_index("Date", inplace=True)
+            st.warning("⚠️ Loaded fallback data from sample_aapl.csv")
+            return df
+        except Exception as e:
+            st.error(f"❌ Fallback data loading failed: {e}")
+            return pd.DataFrame()
 
 data = load_data(ticker, start_date, end_date)
 
-if data.empty or "Close" not in data.columns:
-    st.warning("🔁 Falling back to sample data due to fetch error.")
-    try:
-        data = pd.read_csv("sample_aapl.csv")
-        data["Date"] = pd.to_datetime(data["Date"])
-        data.set_index("Date", inplace=True)
-    except Exception:
-        st.error("❌ No data found and fallback also failed. Please check the stock symbol and date range.")
-        st.stop()
+if data.empty:
+    st.error("❌ No data found. Please check the stock symbol and date range.")
+    st.stop()
 
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = data.columns.droplevel(0)
+
+if "Close" not in data.columns:
+    st.error("❌ 'Close' column missing in the data.")
+    st.stop()
 
 st.subheader("📈 Closing Price Chart")
 st.plotly_chart(px.line(data, x=data.index, y="Close", title=f"{ticker} Closing Price"))
@@ -110,10 +95,14 @@ def run_prophet(train, test):
 def run_arima(train, test):
     ts_train = train["y"].astype(float)
     ts_test = test["y"].astype(float)
-    m = ARIMA(ts_train, order=(5, 1, 0)).fit()
-    preds = m.forecast(steps=len(ts_test))
-    rmse = np.sqrt(mean_squared_error(ts_test, preds))
-    return preds, rmse
+    try:
+        m = ARIMA(ts_train, order=(5, 1, 0)).fit()
+        preds = m.forecast(steps=len(ts_test))
+        rmse = np.sqrt(mean_squared_error(ts_test, preds))
+        return preds, rmse
+    except Exception as e:
+        st.error(f"❌ ARIMA model failed: {e}")
+        return np.zeros(len(ts_test)), float("inf")
 
 def create_sequences(arr, ts=60):
     X, y = [], []
