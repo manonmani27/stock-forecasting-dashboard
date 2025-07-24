@@ -41,18 +41,28 @@ if (end_date - start_date).days > 1825:
 st.markdown(f"📅 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
 
 @st.cache_data(show_spinner=False)
-def load_data(ticker, start, end):
-    try:
-        df = yf.download(ticker, start=start, end=end)
-        return df
-    except Exception:
-        return pd.DataFrame()
+def load_data(ticker, start, end, max_tries=3):
+    for i in range(max_tries):
+        try:
+            df = yf.download(ticker, start=start, end=end, progress=False)
+            if not df.empty:
+                return df
+        except Exception as e:
+            print(f"Attempt {i+1} failed: {e}")
+        time.sleep(1)
+    return pd.DataFrame()
 
 data = load_data(ticker, start_date, end_date)
 
 if data.empty or "Close" not in data.columns:
-    st.error("❌ No data found. Please check the stock symbol and date range.")
-    st.stop()
+    st.warning("🔁 Falling back to sample data due to fetch error.")
+    try:
+        data = pd.read_csv("sample_aapl.csv")
+        data["Date"] = pd.to_datetime(data["Date"])
+        data.set_index("Date", inplace=True)
+    except Exception:
+        st.error("❌ No data found and fallback also failed. Please check the stock symbol and date range.")
+        st.stop()
 
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = data.columns.droplevel(0)
@@ -151,4 +161,3 @@ with st.spinner("🔮 Forecasting..."):
 
 if time.time() - start_time > 45:
     st.warning("⚠️ Forecasting took long. Try smaller range.")
-
