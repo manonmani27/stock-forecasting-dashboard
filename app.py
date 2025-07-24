@@ -52,6 +52,7 @@ def load_data(ticker, start, end):
             fallback = pd.read_csv("sample_aapl.csv", parse_dates=["Date"])
             fallback = fallback[(fallback["Date"] >= pd.to_datetime(start)) & (fallback["Date"] <= pd.to_datetime(end))]
             fallback.set_index("Date", inplace=True)
+            st.info("✅ Loaded fallback data from sample_aapl.csv")
             return fallback
         return pd.DataFrame()
 
