@@ -1,11 +1,11 @@
 streamlit
-pandas
 yfinance
-prophet
+pandas
+numpy
+plotly
 statsmodels
 scikit-learn
-tensorflow
-plotly
+tensorflow==2.12.0
 
 
 
