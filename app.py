@@ -31,9 +31,9 @@ model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compa
 if (end_date - start_date).days > 1825:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
-# Cached data loader
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
+    st.info(f"📥 Fetching data for: `{ticker}` from {start} to {end}")
     return yf.download(ticker, start=start, end=end)
 
 # Load stock data
