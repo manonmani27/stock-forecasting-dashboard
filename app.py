@@ -64,7 +64,16 @@ safe_end_date = min(end_date, today)
 data = load_data(ticker, start_date, safe_end_date)
 
 # Remove future rows (in case yfinance includes them)
-data = data[data.index <= pd.Timestamp.today()]
+safe_end_date = min(end_date, today)
+data = load_data(ticker, start_date, safe_end_date)
+
+# ✅ DO NOT FILTER AGAIN — data already capped at fetch time
+# (No need for: data = data[data.index <= pd.Timestamp.today()])
+
+if data.empty:
+    st.error("❌ No historical data found for selected range.")
+    st.stop()
+
 
 if data.empty:
     st.error("❌ No historical data found for selected range.")
