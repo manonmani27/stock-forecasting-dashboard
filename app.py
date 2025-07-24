@@ -12,6 +12,7 @@ import plotly.express as px
 import warnings
 import time
 import os
+from datetime import date
 
 # Suppress TensorFlow logs & warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -22,19 +23,12 @@ st.set_page_config(page_title="📈 Stock Forecasting Dashboard", layout="wide")
 st.title("📈 Stock Price Forecasting Dashboard")
 
 # Today's date for validation
-today = pd.to_datetime("today").normalize()
+today = pd.to_datetime(date.today())
 
 # Sidebar Inputs
 ticker = st.sidebar.text_input("Stock Symbol", value="AAPL")
-
-# Date input with validation to avoid future end dates
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
-end_date = st.sidebar.date_input(
-    "End Date",
-    value=min(pd.to_datetime("2024-12-31"), today),
-    max_value=today
-)
-
+end_date = st.sidebar.date_input("End Date", value=min(pd.to_datetime("2024-12-31"), today), max_value=today)
 model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compare All"])
 
 # Warn if date range is too long
@@ -46,16 +40,18 @@ st.markdown(f"📥 **Fetching data for:** `{ticker}` from `{start_date}` to `{en
 # Cached data loader
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
-    return yf.download(ticker, start=start, end=end)
+    try:
+        return yf.download(ticker, start=start, end=end)
+    except Exception as e:
+        st.error(f"❌ Error fetching data: {e}")
+        return pd.DataFrame()
 
 # Load stock data
 data = load_data(ticker, start_date, end_date)
 
-# Enhanced validation
 if data.empty:
     st.error("❌ No data found. Please check the stock symbol and date range.")
     st.stop()
-
 
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = data.columns.droplevel(0)
@@ -96,7 +92,7 @@ def create_sequences(arr, ts=60):
     return np.array(X), np.array(y)
 
 @st.cache_resource(show_spinner=False)
-def run_lstm(df, train_size, ts = 60):
+def run_lstm(df, train_size, ts=60):
     scaler = MinMaxScaler()
     arr = scaler.fit_transform(df[["y"]])
     train_arr, test_arr = arr[:train_size], arr[train_size:]
@@ -104,18 +100,21 @@ def run_lstm(df, train_size, ts = 60):
         return np.array([]), float("inf")
     X_train, y_train = create_sequences(train_arr, ts)
     X_test, y_test = create_sequences(test_arr, ts)
-    if X_train.size==0 or X_test.size==0:
+    if X_train.size == 0 or X_test.size == 0:
         return np.array([]), float("inf")
     X_train = X_train.reshape(-1, ts, 1)
     X_test = X_test.reshape(-1, ts, 1)
     model = Sequential([
-        LSTM(50, return_sequences=True, input_shape=(ts,1)),
-        Dropout(0.2), LSTM(50), Dropout(0.2), Dense(1)
+        LSTM(50, return_sequences=True, input_shape=(ts, 1)),
+        Dropout(0.2),
+        LSTM(50),
+        Dropout(0.2),
+        Dense(1)
     ])
     model.compile("adam", "mean_squared_error")
     model.fit(X_train, y_train, epochs=2, batch_size=32, verbose=0)
     preds = scaler.inverse_transform(model.predict(X_test))
-    actual = scaler.inverse_transform(y_test.reshape(-1,1))
+    actual = scaler.inverse_transform(y_test.reshape(-1, 1))
     rmse = np.sqrt(mean_squared_error(actual, preds))
     return preds, rmse
 
@@ -123,19 +122,19 @@ def run_lstm(df, train_size, ts = 60):
 start_time = time.time()
 with st.spinner("🔮 Forecasting..."):
 
-    if model_choice=="Prophet":
+    if model_choice == "Prophet":
         preds, rmse = run_prophet(train, test)
         st.subheader("📊 Prophet Results")
         st.write(f"RMSE: {rmse:.2f}")
         st.line_chart(pd.DataFrame({"Actual": test["y"], "Predicted": preds}, index=test["ds"]))
 
-    elif model_choice=="ARIMA":
+    elif model_choice == "ARIMA":
         preds, rmse = run_arima(train, test)
         st.subheader("📊 ARIMA Results")
         st.write(f"RMSE: {rmse:.2f}")
         st.line_chart(pd.DataFrame({"Actual": test["y"], "Predicted": preds}, index=test["ds"]))
 
-    elif model_choice=="LSTM":
+    elif model_choice == "LSTM":
         preds, rmse = run_lstm(df, train_size)
         if rmse != float("inf"):
             st.subheader("📊 LSTM Results")
@@ -150,7 +149,7 @@ with st.spinner("🔮 Forecasting..."):
         p2, r2 = run_arima(train, test)
         p3, r3 = run_lstm(df, train_size)
         st.subheader("📊 RMSE Comparison")
-        st.bar_chart(pd.Series({"Prophet":r1,"ARIMA":r2,"LSTM":r3}))
+        st.bar_chart(pd.Series({"Prophet": r1, "ARIMA": r2, "LSTM": r3}))
 
-if time.time()-start_time > 45:
+if time.time() - start_time > 45:
     st.warning("⚠️ Forecasting took long. Try smaller range.")
