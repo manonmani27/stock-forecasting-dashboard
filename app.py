@@ -1,4 +1,9 @@
 import streamlit as st
+
+# MUST BE FIRST STREAMLIT CALL
+st.set_page_config(page_title="📈 Stock Forecasting Dashboard", layout="wide")
+
+# Now import rest
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -14,20 +19,17 @@ import warnings
 import time
 import os
 
-# Must come first
-st.set_page_config(page_title="📈 Stock Forecasting Dashboard", layout="wide")
-
-# For debugging runtime
+# Debug Python version
 st.write("Python version:", sys.version)
 
-# Suppress TensorFlow logs & warnings
+# Clean logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
 
+# UI
 st.title("📈 Stock Price Forecasting Dashboard")
 
 today = pd.to_datetime("today").normalize()
-
 ticker = st.sidebar.text_input("Stock Symbol", value="AAPL")
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
 end_date = st.sidebar.date_input("End Date", value=min(pd.to_datetime("2024-12-31"), today), max_value=today)
@@ -36,16 +38,19 @@ model_choice = st.sidebar.selectbox("Model", ["ARIMA", "Prophet", "LSTM", "Compa
 if (end_date - start_date).days > 1825:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
 
-st.markdown(f"📥 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
+st.markdown(f"📅 **Fetching data for:** `{ticker}` from `{start_date}` to `{end_date}`")
 
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
-    df = yf.download(ticker, start=start, end=end)
-    return df
+    try:
+        df = yf.download(ticker, start=start, end=end)
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 data = load_data(ticker, start_date, end_date)
 
-if data.empty:
+if data.empty or "Close" not in data.columns:
     st.error("❌ No data found. Please check the stock symbol and date range.")
     st.stop()
 
@@ -55,6 +60,7 @@ if isinstance(data.columns, pd.MultiIndex):
 st.subheader("📈 Closing Price Chart")
 st.plotly_chart(px.line(data, x=data.index, y="Close", title=f"{ticker} Closing Price"))
 
+# Prepare for model training
 df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
 train_size = int(len(df) * 0.8)
 train, test = df.iloc[:train_size], df.iloc[train_size:]
@@ -86,7 +92,7 @@ def create_sequences(arr, ts=60):
     return np.array(X), np.array(y)
 
 @st.cache_resource(show_spinner=False)
-def run_lstm(df, train_size, ts = 60):
+def run_lstm(df, train_size, ts=60):
     scaler = MinMaxScaler()
     arr = scaler.fit_transform(df[["y"]])
     train_arr, test_arr = arr[:train_size], arr[train_size:]
@@ -114,7 +120,6 @@ def run_lstm(df, train_size, ts = 60):
 
 start_time = time.time()
 with st.spinner("🔮 Forecasting..."):
-
     if model_choice == "Prophet":
         preds, rmse = run_prophet(train, test)
         st.subheader("📊 Prophet Results")
@@ -146,3 +151,4 @@ with st.spinner("🔮 Forecasting..."):
 
 if time.time() - start_time > 45:
     st.warning("⚠️ Forecasting took long. Try smaller range.")
+
