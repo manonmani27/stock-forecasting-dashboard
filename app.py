@@ -23,7 +23,7 @@ three_years_ago = today - datetime.timedelta(days=3 * 365)
 ticker = st.text_input("Stock Symbol", "AAPL")
 start_date = st.date_input("Start Date", datetime.date(2018, 1, 1))
 end_date = st.date_input("End Date", datetime.date(2024, 12, 31))
-model_type = st.selectbox("Model", ["ARIMA", "LSTM"])
+model_type = st.selectbox("Model", ["ARIMA", "LSTM", "Prophet", "Comparison"])
 
 if (end_date - start_date).days > 365 * 5:
     st.warning("⚠️ Date range is more than 5 years. This may slow forecasting, especially with LSTM.")
@@ -102,6 +102,21 @@ def run_lstm(train, test):
     rmse = np.sqrt(mean_squared_error(test["y"], predictions))
     return predictions, rmse
 
+from prophet import Prophet
+
+def run_prophet(train, test):
+    try:
+        model = Prophet()
+        model.fit(train)
+        future = model.make_future_dataframe(periods=len(test), freq='D')
+        forecast = model.predict(future)
+        preds = forecast['yhat'][-len(test):].values
+        rmse = np.sqrt(mean_squared_error(test['y'], preds))
+        return preds, rmse
+    except Exception as e:
+        st.error(f"Prophet model failed: {e}")
+        return np.array([]), None
+
 # Run and display
 if model_type == "ARIMA":
     st.subheader("🔮 ARIMA Forecast")
@@ -109,12 +124,34 @@ if model_type == "ARIMA":
 elif model_type == "LSTM":
     st.subheader("🔮 LSTM Forecast")
     preds, rmse = run_lstm(train, test)
+elif model_type == "Prophet":
+    st.subheader("🔮 Prophet Forecast")
+    preds, rmse = run_prophet(train, test)
 
 # Plot Forecast
 forecast_df = test.copy()
 forecast_df["Forecast"] = preds
 
-fig2 = px.line(forecast_df, x="ds", y=["y", "Forecast"], labels={"value": "Price", "ds": "Date"}, title=f"{model_type} Forecast vs Actual")
-st.plotly_chart(fig2)
+# If comparison mode, run all models and plot together
+if model_type == "Comparison":
+    st.subheader("🔮 Model Comparison Forecast")
+    preds_arima, rmse_arima = run_arima(train, test)
+    preds_lstm, rmse_lstm = run_lstm(train, test)
+    preds_prophet, rmse_prophet = run_prophet(train, test)
 
-st.metric("RMSE", f"{rmse:.2f}")
+    comp_df = test.copy()
+    comp_df["ARIMA"] = preds_arima
+    comp_df["LSTM"] = preds_lstm
+    comp_df["Prophet"] = preds_prophet
+
+    fig_comp = px.line(comp_df, x="ds", y=["y", "ARIMA", "LSTM", "Prophet"], labels={"value": "Price", "ds": "Date"}, title="Model Comparison Forecast vs Actual")
+    st.plotly_chart(fig_comp)
+
+    st.metric("ARIMA RMSE", f"{rmse_arima:.2f}")
+    st.metric("LSTM RMSE", f"{rmse_lstm:.2f}")
+    st.metric("Prophet RMSE", f"{rmse_prophet:.2f}")
+else:
+    fig2 = px.line(forecast_df, x="ds", y=["y", "Forecast"], labels={"value": "Price", "ds": "Date"}, title=f"{model_type} Forecast vs Actual")
+    st.plotly_chart(fig2)
+
+    st.metric("RMSE", f"{rmse:.2f}")
