@@ -129,8 +129,9 @@ elif model_type == "Prophet":
     preds, rmse = run_prophet(train, test)
 
 # Plot Forecast
-forecast_df = test.copy()
-forecast_df["Forecast"] = preds
+if model_type != "Comparison":
+    forecast_df = test.copy()
+    forecast_df["Forecast"] = preds
 
 # If comparison mode, run all models and plot together
 if model_type == "Comparison":
