@@ -47,8 +47,11 @@ def load_data(symbol, start, end):
     return df
 
 data = load_data(ticker, start_date, end_date)
-st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F4C4)} Data for {ticker} from {start_date} to {end_date}</h3>", unsafe_allow_html=True)
-st.dataframe(data.tail())
+if data.shape[0] < 20:
+    st.error("Insufficient data for modeling. Please select a longer date range or a different stock symbol.")
+else:
+    st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F4C4)} Data for {ticker} from {start_date} to {end_date}</h3>", unsafe_allow_html=True)
+    st.dataframe(data.tail())
 
 # Line chart for closing price
 fig1 = go.Figure()
@@ -65,17 +68,32 @@ fig1.update_layout(
 )
 st.plotly_chart(fig1, use_container_width=True)
 
-# Train-Test split
-train_size = int(len(data) * 0.8)
-train, test = data[:train_size], data[train_size:]
+# Train-Test split with minimum size checks
+min_train_size = 30  # minimum training size for models
+min_test_size = 10   # minimum test size
+
+if len(data) < (min_train_size + min_test_size):
+    st.error(f"Not enough data for modeling. Please select a longer date range or different stock symbol. Minimum required data points: {min_train_size + min_test_size}")
+    train, test = None, None
+else:
+    train_size = max(min_train_size, int(len(data) * 0.8))
+    test_size = len(data) - train_size
+    if test_size < min_test_size:
+        train_size = len(data) - min_test_size
+    train, test = data[:train_size], data[train_size:]
 
 # Forecasting Functions
 def run_arima(train, test):
-    model = ARIMA(train['y'], order=(5, 1, 0))
-    fitted = model.fit()
-    forecast = fitted.forecast(steps=len(test))
-    rmse = np.sqrt(mean_squared_error(test['y'], forecast))
-    return forecast, rmse
+    if len(train) < 10:
+        raise ValueError("Training data too small for ARIMA model.")
+    try:
+        model = ARIMA(train['y'], order=(5, 1, 0))
+        fitted = model.fit()
+        forecast = fitted.forecast(steps=len(test))
+        rmse = np.sqrt(mean_squared_error(test['y'], forecast))
+        return forecast, rmse
+    except Exception as e:
+        raise RuntimeError(f"ARIMA model fitting failed: {e}")
 
 def run_prophet(train, test):
     model = Prophet()
@@ -87,17 +105,19 @@ def run_prophet(train, test):
     return forecast['yhat'], rmse
 
 def run_lstm(train, test):
-    series = pd.concat([train['y'], test['y']]).values.reshape(-1, 1)
+    # Prepare series data for LSTM
+    series = train['y'].values.reshape(-1, 1)
     gen = TimeseriesGenerator(series, series, length=10, batch_size=1)
 
     model = Sequential()
     model.add(LSTM(50, activation='relu', input_shape=(10, 1)))
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mse')
-    model.fit(gen, epochs=5, verbose=0)
+    model.fit(gen, epochs=20, verbose=0)
 
     predictions = []
-    curr_batch = series[train_size - 10:train_size].reshape(1, 10, 1)
+    # Use last 10 points from train as seed input
+    curr_batch = series[-10:].reshape(1, 10, 1)
     for i in range(len(test)):
         pred = model.predict(curr_batch, verbose=0)[0][0]
         predictions.append(pred)
@@ -124,58 +144,95 @@ def plot_forecast(title, actual, predicted, model_color, model_name):
     st.plotly_chart(fig, use_container_width=True)
 
 # Run selected model
-if model_type == "ARIMA":
-    st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F4C8)} ARIMA Forecast</h3>", unsafe_allow_html=True)
-    preds, rmse = run_arima(train, test)
-    plot_forecast("ARIMA Forecast vs Actual", test.set_index('ds')['y'], preds, COLOR_ARIMA, "ARIMA")
-    st.metric("RMSE", f"{rmse:.2f}")
+if data.shape[0] >= 20:
+    if model_type == "ARIMA":
+        st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F4C8)} ARIMA Forecast</h3>", unsafe_allow_html=True)
+        try:
+            preds, rmse = run_arima(train, test)
+            plot_forecast("ARIMA Forecast vs Actual", test.set_index('ds')['y'], preds, COLOR_ARIMA, "ARIMA")
+            st.metric("RMSE", f"{rmse:.2f}")
+        except Exception as e:
+            st.error(f"ARIMA model error: {e}")
 
-elif model_type == "Prophet":
-    st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F916)} Prophet Forecast</h3>", unsafe_allow_html=True)
-    preds, rmse = run_prophet(train, test)
-    plot_forecast("Prophet Forecast vs Actual", test.set_index('ds')['y'], preds, COLOR_PROPHET, "Prophet")
-    st.metric("RMSE", f"{rmse:.2f}")
+    elif model_type == "Prophet":
+        st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F916)} Prophet Forecast</h3>", unsafe_allow_html=True)
+        try:
+            preds, rmse = run_prophet(train, test)
+            plot_forecast("Prophet Forecast vs Actual", test.set_index('ds')['y'], preds, COLOR_PROPHET, "Prophet")
+            st.metric("RMSE", f"{rmse:.2f}")
+        except Exception as e:
+            st.error(f"Prophet model error: {e}")
 
-elif model_type == "LSTM":
-    st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F916)} LSTM Forecast</h3>", unsafe_allow_html=True)
-    preds, rmse = run_lstm(train, test)
-    plot_forecast("LSTM Forecast vs Actual", test.set_index('ds')['y'], preds, COLOR_LSTM, "LSTM")
-    st.metric("RMSE", f"{rmse:.2f}")
+    elif model_type == "LSTM":
+        st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F916)} LSTM Forecast</h3>", unsafe_allow_html=True)
+        try:
+            preds, rmse = run_lstm(train, test)
+            plot_forecast("LSTM Forecast vs Actual", test.set_index('ds')['y'], preds, COLOR_LSTM, "LSTM")
+            st.metric("RMSE", f"{rmse:.2f}")
+        except Exception as e:
+            st.error(f"LSTM model error: {e}")
 
-elif model_type == "Comparison":
-    st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F4CA)} Model Performance Comparison (Lower RMSE is Better)</h3>", unsafe_allow_html=True)
-    preds_arima, rmse_arima = run_arima(train, test)
-    preds_prophet, rmse_prophet = run_prophet(train, test)
-    preds_lstm, rmse_lstm = run_lstm(train, test)
+    elif model_type == "Comparison":
+        st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F4CA)} Model Performance Comparison (Lower RMSE is Better)</h3>", unsafe_allow_html=True)
+        try:
+            preds_arima, rmse_arima = run_arima(train, test)
+        except Exception as e:
+            st.error(f"ARIMA model error: {e}")
+            preds_arima, rmse_arima = None, None
+        try:
+            preds_prophet, rmse_prophet = run_prophet(train, test)
+        except Exception as e:
+            st.error(f"Prophet model error: {e}")
+            preds_prophet, rmse_prophet = None, None
+        try:
+            preds_lstm, rmse_lstm = run_lstm(train, test)
+        except Exception as e:
+            st.error(f"LSTM model error: {e}")
+            preds_lstm, rmse_lstm = None, None
 
-    # Line chart comparison
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=test['ds'], y=test['y'], mode='lines', name='Actual', line=dict(color=COLOR_ACTUAL)))
-    fig.add_trace(go.Scatter(x=test['ds'], y=preds_arima, mode='lines', name='ARIMA', line=dict(color=COLOR_ARIMA)))
-    fig.add_trace(go.Scatter(x=test['ds'], y=preds_prophet, mode='lines', name='Prophet', line=dict(color=COLOR_PROPHET)))
-    fig.add_trace(go.Scatter(x=test['ds'], y=preds_lstm, mode='lines', name='LSTM', line=dict(color=COLOR_LSTM)))
-    fig.update_layout(
-        title=dict(text="Model Forecast Comparison", font=dict(family=FONT_FAMILY, size=TITLE_FONT_SIZE, color="black"), x=0.5),
-        xaxis_title=dict(text="Date", font=dict(family=FONT_FAMILY, size=AXIS_TITLE_FONT_SIZE, color="black")),
-        yaxis_title=dict(text="Price", font=dict(family=FONT_FAMILY, size=AXIS_TITLE_FONT_SIZE, color="black")),
-        font=dict(family=FONT_FAMILY, size=TICK_FONT_SIZE, color="black"),
-        plot_bgcolor="white",
-        margin=dict(l=40, r=40, t=60, b=40),
-        xaxis=dict(showgrid=True, gridcolor="lightgray"),
-        yaxis=dict(showgrid=True, gridcolor="lightgray")
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        # Line chart comparison
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=test['ds'], y=test['y'], mode='lines', name='Actual', line=dict(color=COLOR_ACTUAL)))
+        if preds_arima is not None:
+            fig.add_trace(go.Scatter(x=test['ds'], y=preds_arima, mode='lines', name='ARIMA', line=dict(color=COLOR_ARIMA)))
+        if preds_prophet is not None:
+            fig.add_trace(go.Scatter(x=test['ds'], y=preds_prophet, mode='lines', name='Prophet', line=dict(color=COLOR_PROPHET)))
+        if preds_lstm is not None:
+            fig.add_trace(go.Scatter(x=test['ds'], y=preds_lstm, mode='lines', name='LSTM', line=dict(color=COLOR_LSTM)))
+        fig.update_layout(
+            title=dict(text="Model Forecast Comparison", font=dict(family=FONT_FAMILY, size=TITLE_FONT_SIZE, color="black"), x=0.5),
+            xaxis_title=dict(text="Date", font=dict(family=FONT_FAMILY, size=AXIS_TITLE_FONT_SIZE, color="black")),
+            yaxis_title=dict(text="Price", font=dict(family=FONT_FAMILY, size=AXIS_TITLE_FONT_SIZE, color="black")),
+            font=dict(family=FONT_FAMILY, size=TICK_FONT_SIZE, color="black"),
+            plot_bgcolor="white",
+            margin=dict(l=40, r=40, t=60, b=40),
+            xaxis=dict(showgrid=True, gridcolor="lightgray"),
+            yaxis=dict(showgrid=True, gridcolor="lightgray")
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Bar chart comparison
-    fig_bar, ax = plt.subplots(figsize=(8, 5))
-    model_names = ["ARIMA", "Prophet", "LSTM"]
-    rmses = [rmse_arima, rmse_prophet, rmse_lstm]
-    colors = [COLOR_BAR_ARIMA, COLOR_BAR_PROPHET, COLOR_BAR_LSTM]
-    bars = ax.bar(model_names, rmses, color=colors)
-    ax.set_ylabel("RMSE", fontsize=AXIS_TITLE_FONT_SIZE, fontname=FONT_FAMILY)
-    ax.set_title("Model Comparison", fontsize=TITLE_FONT_SIZE, fontweight='bold', fontname=FONT_FAMILY)
-    ax.tick_params(axis='x', labelsize=TICK_FONT_SIZE)
-    ax.tick_params(axis='y', labelsize=TICK_FONT_SIZE)
-    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
-        label.set_fontname(FONT_FAMILY)
-    st.pyplot(fig_bar)
+        # Bar chart comparison
+        fig_bar, ax = plt.subplots(figsize=(8, 5))
+        model_names = []
+        rmses = []
+        colors = []
+        if preds_arima is not None:
+            model_names.append("ARIMA")
+            rmses.append(rmse_arima)
+            colors.append(COLOR_BAR_ARIMA)
+        if preds_prophet is not None:
+            model_names.append("Prophet")
+            rmses.append(rmse_prophet)
+            colors.append(COLOR_BAR_PROPHET)
+        if preds_lstm is not None:
+            model_names.append("LSTM")
+            rmses.append(rmse_lstm)
+            colors.append(COLOR_BAR_LSTM)
+        bars = ax.bar(model_names, rmses, color=colors)
+        ax.set_ylabel("RMSE", fontsize=AXIS_TITLE_FONT_SIZE, fontname=FONT_FAMILY)
+        ax.set_title("Model Comparison", fontsize=TITLE_FONT_SIZE, fontweight='bold', fontname=FONT_FAMILY)
+        ax.tick_params(axis='x', labelsize=TICK_FONT_SIZE)
+        ax.tick_params(axis='y', labelsize=TICK_FONT_SIZE)
+        for label in (ax.get_xticklabels() + ax.get_yticklabels()):
+            label.set_fontname(FONT_FAMILY)
+        st.pyplot(fig_bar)
