@@ -1,3 +1,6 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU to avoid CUDA errors
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -11,10 +14,9 @@ from tensorflow.keras.layers import LSTM, Dense
 from tensorflow.keras.preprocessing.sequence import TimeseriesGenerator
 from prophet import Prophet
 import datetime
-import os
 
 # Define consistent fonts and colors
-FONT_FAMILY = "Arial, Helvetica, sans-serif"
+FONT_FAMILY = "DejaVu Sans"
 TITLE_FONT_SIZE = 20
 AXIS_TITLE_FONT_SIZE = 16
 TICK_FONT_SIZE = 14
@@ -40,15 +42,33 @@ model_type = st.selectbox("Select Model", ["ARIMA", "Prophet", "LSTM", "Comparis
 # Load Data
 @st.cache_data(show_spinner=True)
 def load_data(symbol, start, end):
-    df = yf.download(symbol, start=start, end=end)
-    df = df[["Close"]].dropna()
-    df.reset_index(inplace=True)
-    df.columns = ["ds", "y"]
-    return df
+    try:
+        df = yf.download(symbol, start=start, end=end)
+        if df.empty or "Close" not in df.columns:
+            raise ValueError("No data found for symbol")
+        df = df[["Close"]].dropna()
+        df.reset_index(inplace=True)
+        df.columns = ["ds", "y"]
+        if len(df) < 20:
+            raise ValueError("Insufficient data from yfinance")
+        return df, False
+    except Exception as e:
+        # Load sample data fallback
+        sample_path = "sample_aapl.csv"
+        if os.path.exists(sample_path):
+            df_sample = pd.read_csv(sample_path)
+            df_sample.columns = ["ds", "y"]
+            st.warning(f"Using sample data due to data unavailability or error: {e}")
+            return df_sample, True
+        else:
+            st.error(f"Failed to load data and sample data not found: {e}")
+            return pd.DataFrame(columns=["ds", "y"]), False
 
-data = load_data(ticker, start_date, end_date)
+data, is_sample = load_data(ticker, start_date, end_date)
 if data.shape[0] < 20:
     st.error("Insufficient data for modeling. Please select a longer date range or a different stock symbol.")
+elif is_sample:
+    st.info("Note: Sample data is being used for demonstration purposes.")
 else:
     st.markdown(f"<h3 style='font-family:{FONT_FAMILY}; font-weight:bold;'>{chr(0x1F4C4)} Data for {ticker} from {start_date} to {end_date}</h3>", unsafe_allow_html=True)
     st.dataframe(data.tail())
@@ -84,6 +104,8 @@ else:
 
 # Forecasting Functions
 def run_arima(train, test):
+    train = train.dropna(subset=['y'])
+    test = test.dropna(subset=['y'])
     if len(train) < 10:
         raise ValueError("Training data too small for ARIMA model.")
     try:
@@ -96,24 +118,41 @@ def run_arima(train, test):
         raise RuntimeError(f"ARIMA model fitting failed: {e}")
 
 def run_prophet(train, test):
+    train = train.dropna(subset=['ds', 'y'])
+    test = test.dropna(subset=['ds', 'y'])
     model = Prophet()
     model.fit(train)
     future = model.make_future_dataframe(periods=len(test), freq='D')
+    future = future.dropna(subset=['ds'])
     forecast = model.predict(future)
-    forecast = forecast[['ds', 'yhat']].set_index('ds').loc[test['ds']]
-    rmse = np.sqrt(mean_squared_error(test['y'], forecast['yhat']))
-    return forecast['yhat'], rmse
+    # Ensure 'ds' columns are datetime for both dataframes before merging
+    test = test.copy()
+    forecast_subset = forecast[['ds', 'yhat']].copy()
+    test['ds'] = pd.to_datetime(test['ds'])
+    forecast_subset['ds'] = pd.to_datetime(forecast_subset['ds'])
+    merged = pd.merge(test, forecast_subset, on='ds', how='left')
+    # Drop NaNs in merged before RMSE calculation
+    merged = merged.dropna(subset=['y', 'yhat'])
+    if merged.empty:
+        raise ValueError("Merged dataframe is empty after dropping NaNs, cannot compute RMSE.")
+    rmse = np.sqrt(mean_squared_error(merged['y'], merged['yhat']))
+    return merged['yhat'], rmse
 
 def run_lstm(train, test):
+    train = train.dropna(subset=['y'])
+    test = test.dropna(subset=['y'])
     # Prepare series data for LSTM
     series = train['y'].values.reshape(-1, 1)
     gen = TimeseriesGenerator(series, series, length=10, batch_size=1)
 
     model = Sequential()
-    model.add(LSTM(50, activation='relu', input_shape=(10, 1)))
+    model.add(LSTM(50, activation='tanh', input_shape=(10, 1)))  # Changed activation to 'tanh'
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mse')
-    model.fit(gen, epochs=20, verbose=0)
+    try:
+        model.fit(gen, epochs=20, verbose=0)
+    except Exception as e:
+        raise RuntimeError(f"LSTM model training failed: {e}")
 
     predictions = []
     # Use last 10 points from train as seed input
