@@ -1,4 +1,6 @@
 # 📈 Stock Price Forecasting Dashboard
+ 
+An interactive dashboard for forecasting stock prices using ARIMA, LSTM, and optionally Prophet models. Built with Python and Streamlit during my internship at Zidio.
 
 This is an interactive Streamlit-based dashboard that allows users to forecast stock prices using three popular models:
 - **ARIMA**
